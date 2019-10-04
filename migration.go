@@ -41,14 +41,6 @@ func Init(cfg *config.Config) *Migrator {
 		os.Exit(1)
 	}
 
-	// Migrations
-	// TODO: build a helper to create Migration struct
-	//mig.makeMigration(mig.Up00000001)
-	//mig.makeMigration(mig.Up00000002)
-
-	// Rollbacks
-	//mig.makeRollback(mig.Down00000001)
-	//mig.makeRollback(mig.Down00000002)
 	return mig
 }
 
@@ -129,11 +121,28 @@ func (m *Migrator) AddDown(rb *Migration) {
 
 func (m *Migrator) MigrateAll() error {
 	for i, mg := range m.up {
-		fmt.Println(mg)
 		exec := mg.Executor
-		exec.SetTx(m.GetTx())
+		tx := m.GetTx()
+		exec.SetTx(tx)
+
+		// Expected function name to execute
 		fn := fmt.Sprintf("Up%08d", i+1)
-		reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
+		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
+
+		// Type assert result
+		name, ok := values[0].Interface().(string)
+		// Read name
+		if !ok {
+			log.Println("Not a valid migration function name")
+		}
+		// Read error
+		err, ok := values[1].Interface().(error)
+		if !ok && err != nil {
+			log.Printf("Migration not executed: %s\n", name)
+			log.Printf("Err  %+v' of type %T", err, err)
+		}
+
+		log.Printf("Migration executed: %s\n", name)
 	}
 
 	return nil
@@ -146,7 +155,22 @@ func (m *Migrator) RollbackAll() error {
 		exec := mg.Executor
 		exec.SetTx(m.GetTx())
 		fn := fmt.Sprintf("Down%08d", i+1)
-		reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
+		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
+
+		// Type assert result
+		name, ok := values[0].Interface().(string)
+		// Read name
+		if !ok {
+			log.Println("Not a valid rollback function name")
+		}
+		// Read error
+		err, ok := values[1].Interface().(error)
+		if !ok && err != nil {
+			log.Printf("Rollback not executed: %s\n", name)
+			log.Printf("Err '%+v' of type %T", err, err)
+		}
+
+		log.Printf("Rollback executed: %s\n", name)
 	}
 
 	return nil
