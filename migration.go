@@ -2,13 +2,16 @@ package migration
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"reflect"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq" // package init.
+	"github.com/twinj/uuid"
 	"gitlab.com/mikrowezel/config"
 )
 
@@ -58,6 +61,9 @@ const (
 	);`
 
 	pgDropMigrationsSt = `DROP TABLE %s.%s;`
+
+	pgRegMigrationSt = `INSERT INTO %s.%s (id, name, is_applied, created_at)
+		VALUES (:id, :name, :is_applied, :created_at);`
 )
 
 // Init to explicitly start the migrator.
@@ -119,6 +125,7 @@ func (m *Migrator) dbExists() bool {
 		log.Printf("Error checking database: %s\n", err.Error())
 		return false
 	}
+
 	for r.Next() {
 		var exists sql.NullBool
 		err = r.Scan(&exists)
@@ -224,7 +231,7 @@ func (m *Migrator) Reset(name string) error {
 		return err
 	}
 
-	err = m.igrateAll()
+	err = m.MigrateAll()
 	if err != nil {
 		log.Printf("Drop database error: %s", err.Error())
 		return err
@@ -262,17 +269,41 @@ func (m *Migrator) MigrateAll() error {
 		fn := fmt.Sprintf("Up%08d", i+1)
 		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
 
+		log.Println(fn)
+
 		// Type assert result
 		name, ok := values[0].Interface().(string)
+
 		// Read name
 		if !ok {
 			log.Println("Not a valid migration function name")
 		}
+
 		// Read error
 		err, ok := values[1].Interface().(error)
 		if !ok && err != nil {
 			log.Printf("Migration not executed: %s\n", name)
 			log.Printf("Err  %+v' of type %T", err, err)
+			msg := fmt.Sprintf("cannot run migration '%s': %s", name, err.Error())
+			log.Println(msg)
+			return errors.New(msg)
+		}
+
+		// Update migrations table
+		st := fmt.Sprintf(pgRegMigrationSt, m.schema, pgMigrationsTable)
+		_, err = m.conn.NamedExec(st,
+			map[string]interface{}{
+				"id":         uuid.NewV4(),
+				"name":       name,
+				"is_applied": true,
+				"created_at": time.Now(),
+			},
+		)
+
+		if err != nil {
+			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
+			log.Println(msg)
+			return errors.New(msg)
 		}
 
 		log.Printf("Migration executed: %s\n", name)
