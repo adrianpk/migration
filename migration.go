@@ -57,7 +57,7 @@ const (
 		created_at TIMESTAMP
 	);`
 
-	pgDropMigrationsSt = `DROP TABLE %s.%s`
+	pgDropMigrationsSt = `DROP TABLE %s.%s;`
 )
 
 // Init to explicitly start the migrator.
@@ -147,6 +147,7 @@ func (m *Migrator) migTableExists() bool {
 		log.Printf("Error checking database: %s\n", err.Error())
 		return false
 	}
+
 	for r.Next() {
 		var exists sql.NullBool
 		err = r.Scan(&exists)
@@ -154,7 +155,7 @@ func (m *Migrator) migTableExists() bool {
 			log.Printf("Cannot read query result: %s\n", err.Error())
 			return false
 		}
-		log.Printf("\n\nCreate migrations: %t\n\n", exists.Bool)
+
 		return exists.Bool
 	}
 	return false
@@ -223,7 +224,7 @@ func (m *Migrator) Reset(name string) error {
 		return err
 	}
 
-	err = m.MigrateAll()
+	err = m.igrateAll()
 	if err != nil {
 		log.Printf("Drop database error: %s", err.Error())
 		return err
