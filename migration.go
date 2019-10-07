@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -12,25 +13,51 @@ import (
 )
 
 type (
+	// Migrator struct.
 	Migrator struct {
-		cfg  *config.Config
-		conn *sqlx.DB
-		up   []*Migration
-		down []*Migration
+		cfg    *config.Config
+		conn   *sqlx.DB
+		schema string
+		db     string
+		up     []*Migration
+		down   []*Migration
 	}
 
+	// Exec interface.
 	Exec interface {
-		SetFx(func() (string, error))
-		SetTx(*sqlx.Tx)
+		SetFx(func() (funcName string, err error))
+		SetTx(tx *sqlx.Tx)
 		GetTx() *sqlx.Tx
-		SetErr(error)
+		SetErr(err error)
 		GetErr() error
 	}
 
+	// Migration struct.
 	Migration struct {
 		Order    int
 		Executor Exec
 	}
+)
+
+const (
+	pgMigrationsTable = "migrations"
+
+	pgCreateDbSt = `
+		CREATE DATABASE %s.%s;
+	`
+
+	pgDropDbSt = `
+		DROP DATABASE %s.%s;
+	`
+
+	pgCreateMigrationsSt = `CREATE TABLE %s.%s (
+		id UUID PRIMARY KEY,
+		name VARCHAR(32),
+ 		is_applied BOOLEAN,
+		created_at TIMESTAMP
+	);`
+
+	pgDropMigrationsSt = `DROP TABLE %s.%s`
 )
 
 // Init to explicitly start the migrator.
@@ -44,26 +71,7 @@ func Init(cfg *config.Config) *Migrator {
 	return mig
 }
 
-func (m *Migrator) AddMigration(e Exec) {
-	m.AddUp(&Migration{Executor: e})
-}
-
-func (m *Migrator) AddRollback(e Exec) {
-	m.AddDown(&Migration{Executor: e})
-}
-
-//func (m *Migrator) AddMigration(f func() (string, error)) {
-//m.AddUp(&Migration{Fx: f})
-//}
-
-//func (m *Migrator) AddRollback(f func() (string, error)) {
-//m.AddDown(&Migration{Fx: f})
-//}
-
-func (m *Migrator) GetTx() *sqlx.Tx {
-	return m.conn.MustBegin()
-}
-
+// Connect to database.
 func (m *Migrator) Connect() error {
 	conn, err := sqlx.Open("postgres", m.dbURL())
 	if err != nil {
@@ -81,22 +89,135 @@ func (m *Migrator) Connect() error {
 	return nil
 }
 
-func (m *Migrator) CreateDb() error {
-	return nil
+// GetTx returns a new transaction from migrator connection.
+func (m *Migrator) GetTx() *sqlx.Tx {
+	return m.conn.MustBegin()
 }
 
-func (m *Migrator) DropDb() error {
-	return nil
+// PreSetup creates database
+// and migrations table if needed.
+func (m *Migrator) PreSetup() {
+	if !m.dbExists() {
+		m.CreateDb()
+	}
+
+	if !m.migTableExists() {
+		m.createMigrationsTable()
+	}
 }
 
-func (m *Migrator) Reset() error {
-	err := m.DropDb()
+// dbExists returns true if migrator
+// referenced database has been already created.
+// Only for postgress at the moment.
+func (m *Migrator) dbExists() bool {
+	st := fmt.Sprintf(`select exists(
+		SELECT datname FROM pg_catalog.pg_database WHERE lower(datname) = lower('%s')
+	);`, m.db)
+
+	r, err := m.conn.Query(st)
+	if err != nil {
+		log.Printf("Error checking database: %s\n", err.Error())
+		return false
+	}
+	for r.Next() {
+		var exists sql.NullBool
+		err = r.Scan(&exists)
+		if err != nil {
+			log.Printf("Cannot read query result: %s\n", err.Error())
+			return false
+		}
+		return exists.Bool
+	}
+	return false
+}
+
+// migExists returns true if migrations table exists.
+func (m *Migrator) migTableExists() bool {
+	st := fmt.Sprintf(`SELECT EXISTS (
+		SELECT 1
+   	FROM   pg_catalog.pg_class c
+   	JOIN   pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+   	WHERE  n.nspname = '%s'
+   	AND    c.relname = '%s'
+   	AND    c.relkind = 'r'
+	);`, m.schema, m.db)
+
+	r, err := m.conn.Query(st)
+	if err != nil {
+		log.Printf("Error checking database: %s\n", err.Error())
+		return false
+	}
+	for r.Next() {
+		var exists sql.NullBool
+		err = r.Scan(&exists)
+		if err != nil {
+			log.Printf("Cannot read query result: %s\n", err.Error())
+			return false
+		}
+		log.Printf("\n\nCreate migrations: %t\n\n", exists.Bool)
+		return exists.Bool
+	}
+	return false
+}
+
+// CreateDb migration.
+func (m *Migrator) CreateDb() (string, error) {
+	tx := m.GetTx()
+
+	st := fmt.Sprintf(pgCreateDbSt, m.schema, m.db)
+
+	_, err := tx.Exec(st)
+	if err != nil {
+		return m.db, err
+	}
+
+	return m.db, nil
+}
+
+// DropDb migration.
+func (m *Migrator) DropDb() (string, error) {
+	tx := m.GetTx()
+
+	st := fmt.Sprintf(pgDropDbSt, m.schema, m.db)
+
+	_, err := tx.Exec(st)
+	if err != nil {
+		return m.db, err
+	}
+
+	return m.db, nil
+}
+
+// DropDb migration.
+func (m *Migrator) createMigrationsTable() (string, error) {
+	tx := m.GetTx()
+
+	st := fmt.Sprintf(pgCreateMigrationsSt, m.schema, pgMigrationsTable)
+
+	_, err := tx.Exec(st)
+	if err != nil {
+		return pgMigrationsTable, err
+	}
+
+	return pgMigrationsTable, tx.Commit()
+}
+
+func (m *Migrator) AddMigration(e Exec) {
+	m.AddUp(&Migration{Executor: e})
+}
+
+func (m *Migrator) AddRollback(e Exec) {
+	m.AddDown(&Migration{Executor: e})
+}
+
+func (m *Migrator) Reset(name string) error {
+	_, err := m.DropDb()
 	if err != nil {
 		log.Printf("Drop database error: %s", err.Error())
 		// Do't return maybe it was not created before.
 	}
 
-	err = m.CreateDb()
+	_, err = m.CreateDb()
 	if err != nil {
 		log.Printf("Drop database error: %s", err.Error())
 		return err
@@ -111,6 +232,15 @@ func (m *Migrator) Reset() error {
 	return nil
 }
 
+func (m *Migrator) CreateMigrations() bool {
+	return false
+}
+
+// DropMigrations table.
+func (m *Migrator) DropMigrations() bool {
+	return false
+}
+
 func (m *Migrator) AddUp(mg *Migration) {
 	m.up = append(m.up, mg)
 }
@@ -120,6 +250,8 @@ func (m *Migrator) AddDown(rb *Migration) {
 }
 
 func (m *Migrator) MigrateAll() error {
+	m.PreSetup()
+
 	for i, mg := range m.up {
 		exec := mg.Executor
 		tx := m.GetTx()
@@ -187,8 +319,9 @@ func (m *Migrator) RollbackThis(r Migration) error {
 func (m *Migrator) dbURL() string {
 	host := m.cfg.ValOrDef("pg.host", "localhost")
 	port := m.cfg.ValOrDef("pg.port", "5432")
-	db := m.cfg.ValOrDef("pg.database", "granica_test_d1x89s0l")
+	m.schema = m.cfg.ValOrDef("pg.schema", "public")
+	m.db = m.cfg.ValOrDef("pg.database", "granica_test_d1x89s0l")
 	user := m.cfg.ValOrDef("pg.user", "granica")
 	pass := m.cfg.ValOrDef("pg.password", "granica")
-	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", host, port, user, pass, db)
+	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable search_path=%s", host, port, user, pass, m.db, m.schema)
 }
