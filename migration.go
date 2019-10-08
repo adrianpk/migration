@@ -288,17 +288,19 @@ func (m *Migrator) MigrateAll() error {
 		// Read error
 		err, ok := values[1].Interface().(error)
 		if !ok && err != nil {
-			//log.Printf("Migration not executed: %s\n", name)
-			//log.Printf("Err  %+v' of type %T\n", err, err)
+			log.Printf("Migration not executed: %s\n", name) // TODO: Remove log
+			log.Printf("Err  %+v' of type %T\n", err, err)   // TODO: Remove log.
 			msg := fmt.Sprintf("cannot run migration '%s': %s", name, err.Error())
 			return errors.New(msg)
 		}
 
 		// Register migration
 		err = m.recMigration(tx, name)
+		err = tx.Commit()
 
 		if err != nil {
 			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
+			log.Printf("Commit error: %s", msg)
 			return errors.New(msg)
 		}
 
