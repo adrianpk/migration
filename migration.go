@@ -46,7 +46,7 @@ type (
 
 	migRecord struct {
 		ID        uuid.UUID      `db:"id" json:"id"`
-		Name      sql.NullString `db:"username" json:"username"`
+		Name      sql.NullString `db:"name" json:"name"`
 		IsApplied sql.NullBool   `db:"is_applied" json:"isApplied"`
 		CreatedAt pq.NullTime    `db:"created_at" json:"createdAt"`
 	}
@@ -282,6 +282,7 @@ func (m *Migrator) MigrateAll() error {
 
 		// Read name
 		if !ok {
+			tx.Rollback()
 			return errors.New("Not a valid migration function name")
 		}
 
@@ -291,16 +292,18 @@ func (m *Migrator) MigrateAll() error {
 			log.Printf("Migration not executed: %s\n", name) // TODO: Remove log
 			log.Printf("Err  %+v' of type %T\n", err, err)   // TODO: Remove log.
 			msg := fmt.Sprintf("cannot run migration '%s': %s", name, err.Error())
+			tx.Rollback()
 			return errors.New(msg)
 		}
 
 		// Register migration
 		err = m.recMigration(tx, name)
-		err = tx.Commit()
 
+		err = tx.Commit()
 		if err != nil {
 			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
 			log.Printf("Commit error: %s", msg)
+			tx.Rollback()
 			return errors.New(msg)
 		}
 
@@ -313,23 +316,35 @@ func (m *Migrator) MigrateAll() error {
 func (m *Migrator) RollbackAll() error {
 	top := len(m.down) - 1
 	for i := top; i >= 0; i-- {
+		tx := m.GetTx()
 		mg := m.down[i]
 		exec := mg.Executor
-		exec.SetTx(m.GetTx())
+		exec.SetTx(tx)
+
 		fn := fmt.Sprintf("Down%08d", i+1)
 		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
 
 		// Type assert result
 		name, ok := values[0].Interface().(string)
+
 		// Read name
 		if !ok {
 			log.Println("Not a valid rollback function name")
 		}
+
 		// Read error
 		err, ok := values[1].Interface().(error)
 		if !ok && err != nil {
 			log.Printf("Rollback not executed: %s\n", name)
 			log.Printf("Err '%+v' of type %T", err, err)
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
+			log.Printf("Commit error: %s", msg)
+			tx.Rollback()
+			return errors.New(msg)
 		}
 
 		log.Printf("Rollback executed: %s\n", name)
