@@ -10,9 +10,12 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq" // package init.
 	"github.com/twinj/uuid"
-	"gitlab.com/mikrowezel/config"
+	"gitlab.com/mikrowezel/backend/config"
+	"gitlab.com/mikrowezel/backend/db"
+	"gitlab.com/mikrowezel/backend/db/postgres"
 )
 
 type (
@@ -40,18 +43,23 @@ type (
 		Order    int
 		Executor Exec
 	}
+
+	migRecord struct {
+		ID        uuid.UUID      `db:"id" json:"id"`
+		Name      sql.NullString `db:"username" json:"username"`
+		IsApplied sql.NullBool   `db:"is_applied" json:"isApplied"`
+		CreatedAt pq.NullTime    `db:"created_at" json:"createdAt"`
+	}
 )
 
 const (
 	pgMigrationsTable = "migrations"
 
 	pgCreateDbSt = `
-		CREATE DATABASE %s.%s;
-	`
+		CREATE DATABASE %s.%s;`
 
 	pgDropDbSt = `
-		DROP DATABASE %s.%s;
-	`
+		DROP DATABASE %s.%s;`
 
 	pgCreateMigrationsSt = `CREATE TABLE %s.%s (
 		id UUID PRIMARY KEY,
@@ -269,40 +277,28 @@ func (m *Migrator) MigrateAll() error {
 		fn := fmt.Sprintf("Up%08d", i+1)
 		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
 
-		log.Println(fn)
-
 		// Type assert result
 		name, ok := values[0].Interface().(string)
 
 		// Read name
 		if !ok {
-			log.Println("Not a valid migration function name")
+			return errors.New("Not a valid migration function name")
 		}
 
 		// Read error
 		err, ok := values[1].Interface().(error)
 		if !ok && err != nil {
-			log.Printf("Migration not executed: %s\n", name)
-			log.Printf("Err  %+v' of type %T", err, err)
+			//log.Printf("Migration not executed: %s\n", name)
+			//log.Printf("Err  %+v' of type %T\n", err, err)
 			msg := fmt.Sprintf("cannot run migration '%s': %s", name, err.Error())
-			log.Println(msg)
 			return errors.New(msg)
 		}
 
-		// Update migrations table
-		st := fmt.Sprintf(pgRegMigrationSt, m.schema, pgMigrationsTable)
-		_, err = m.conn.NamedExec(st,
-			map[string]interface{}{
-				"id":         uuid.NewV4(),
-				"name":       name,
-				"is_applied": true,
-				"created_at": time.Now(),
-			},
-		)
+		// Register migration
+		err = m.recMigration(tx, name)
 
 		if err != nil {
 			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
-			log.Println(msg)
 			return errors.New(msg)
 		}
 
@@ -345,6 +341,23 @@ func (m *Migrator) MigrateThis(mg Migration) error {
 }
 
 func (m *Migrator) RollbackThis(r Migration) error {
+	return nil
+}
+
+func (m *Migrator) recMigration(tx *sqlx.Tx, name string) error {
+	st := fmt.Sprintf(pgRegMigrationSt, m.schema, pgMigrationsTable)
+	_, err := tx.NamedExec(st, migRecord{
+		ID:        uuid.NewV4(),
+		Name:      db.ToNullString(name),
+		IsApplied: db.ToNullBool(true),
+		CreatedAt: postgres.ToNullTime(time.Now()),
+	})
+
+	if err != nil {
+		msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
+		return errors.New(msg)
+	}
+
 	return nil
 }
 
