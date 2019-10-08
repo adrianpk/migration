@@ -70,8 +70,10 @@ const (
 
 	pgDropMigrationsSt = `DROP TABLE %s.%s;`
 
-	pgRegMigrationSt = `INSERT INTO %s.%s (id, name, is_applied, created_at)
+	pgRecMigrationSt = `INSERT INTO %s.%s (id, name, is_applied, created_at)
 		VALUES (:id, :name, :is_applied, :created_at);`
+
+	pgDelMigrationSt = `DELETE FROM %s.%s WHERE name = '%s' and is_applied = true`
 )
 
 // Init to explicitly start the migrator.
@@ -339,6 +341,9 @@ func (m *Migrator) RollbackAll() error {
 			log.Printf("Err '%+v' of type %T", err, err)
 		}
 
+		// Register migration
+		err = m.delMigration(tx, name)
+
 		err = tx.Commit()
 		if err != nil {
 			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
@@ -362,13 +367,25 @@ func (m *Migrator) RollbackThis(r Migration) error {
 }
 
 func (m *Migrator) recMigration(tx *sqlx.Tx, name string) error {
-	st := fmt.Sprintf(pgRegMigrationSt, m.schema, pgMigrationsTable)
+	st := fmt.Sprintf(pgRecMigrationSt, m.schema, pgMigrationsTable)
 	_, err := tx.NamedExec(st, migRecord{
 		ID:        uuid.NewV4(),
 		Name:      db.ToNullString(name),
 		IsApplied: db.ToNullBool(true),
 		CreatedAt: postgres.ToNullTime(time.Now()),
 	})
+
+	if err != nil {
+		msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
+		return errors.New(msg)
+	}
+
+	return nil
+}
+
+func (m *Migrator) delMigration(tx *sqlx.Tx, name string) error {
+	st := fmt.Sprintf(pgDelMigrationSt, m.schema, pgMigrationsTable, name)
+	_, err := tx.Exec(st)
 
 	if err != nil {
 		msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
