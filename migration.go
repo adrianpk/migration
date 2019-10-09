@@ -7,6 +7,9 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"regexp"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -19,23 +22,26 @@ import (
 )
 
 type (
+	// Fx type alias
+	Fx = func() error
+
 	// Migrator struct.
 	Migrator struct {
 		cfg    *config.Config
 		conn   *sqlx.DB
 		schema string
 		db     string
-		up     []*Migration
-		down   []*Migration
+		migs   []*Migration
 	}
 
 	// Exec interface.
 	Exec interface {
-		SetFx(func() (funcName string, err error))
+		Config(up Fx, down Fx)
+		GetName() (name string)
+		GetUp() (up Fx)
+		GetDown() (down Fx)
 		SetTx(tx *sqlx.Tx)
-		GetTx() *sqlx.Tx
-		SetErr(err error)
-		GetErr() error
+		GetTx() (tx *sqlx.Tx)
 	}
 
 	// Migration struct.
@@ -47,6 +53,8 @@ type (
 	migRecord struct {
 		ID        uuid.UUID      `db:"id" json:"id"`
 		Name      sql.NullString `db:"name" json:"name"`
+		UpFx      sql.NullString `db:"up_fx" json:"upFx"`
+		DownFx    sql.NullString `db:"down_fx" json:"downFx"`
 		IsApplied sql.NullBool   `db:"is_applied" json:"isApplied"`
 		CreatedAt pq.NullTime    `db:"created_at" json:"createdAt"`
 	}
@@ -63,17 +71,24 @@ const (
 
 	pgCreateMigrationsSt = `CREATE TABLE %s.%s (
 		id UUID PRIMARY KEY,
-		name VARCHAR(32),
+		name VARCHAR(64),
+		up_fx VARCHAR(64),
+		down_fx VARCHAR(64),
  		is_applied BOOLEAN,
 		created_at TIMESTAMP
 	);`
 
 	pgDropMigrationsSt = `DROP TABLE %s.%s;`
 
-	pgRecMigrationSt = `INSERT INTO %s.%s (id, name, is_applied, created_at)
-		VALUES (:id, :name, :is_applied, :created_at);`
+	pgRecMigrationSt = `INSERT INTO %s.%s (id, name, up_fx, down_fx, is_applied, created_at)
+		VALUES (:id, :name, :up_fx, :down_fx, :is_applied, :created_at);`
 
 	pgDelMigrationSt = `DELETE FROM %s.%s WHERE name = '%s' and is_applied = true`
+)
+
+var (
+	matchFirstCap = regexp.MustCompile("(.)([A-Z][a-z]+)")
+	matchAllCap   = regexp.MustCompile("([a-z0-9])([A-Z])")
 )
 
 // Init to explicitly start the migrator.
@@ -221,11 +236,102 @@ func (m *Migrator) createMigrationsTable() (string, error) {
 }
 
 func (m *Migrator) AddMigration(e Exec) {
-	m.AddUp(&Migration{Executor: e})
+	m.migs = append(m.migs, &Migration{Executor: e})
 }
 
-func (m *Migrator) AddRollback(e Exec) {
-	m.AddDown(&Migration{Executor: e})
+func split(r rune) bool {
+	return r == '.' || r == '-'
+}
+
+// Migrate pending migrations.
+func (m *Migrator) Migrate(mg Migration) error {
+	panic("not implemented yet")
+	return nil
+}
+
+// Rollback last migrations.
+func (m *Migrator) Rollback(mg Migration) error {
+	panic("not implemented yet")
+	return nil
+}
+
+func (m *Migrator) MigrateAll() error {
+	m.PreSetup()
+
+	for _, mg := range m.migs {
+		exec := mg.Executor
+
+		// Get a new Tx from migrator
+		tx := m.GetTx()
+		// Pass it to the executor
+		exec.SetTx(tx)
+
+		// Expected function name to execute
+		fn := getFxName(exec.GetUp())
+		//fn := fmt.Sprintf("Up%08d", i+1)
+		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
+
+		// Read error
+		err, ok := values[0].Interface().(error)
+		if !ok && err != nil {
+			log.Printf("Migration not executed: %s\n", fn) // TODO: Remove log
+			log.Printf("Err  %+v' of type %T\n", err, err) // TODO: Remove log.
+			msg := fmt.Sprintf("cannot run migration '%s': %s", fn, err.Error())
+			tx.Rollback()
+			return errors.New(msg)
+		}
+
+		// Register migration
+		err = m.recMigration(exec)
+
+		err = tx.Commit()
+		if err != nil {
+			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
+			log.Printf("Commit error: %s", msg)
+			tx.Rollback()
+			return errors.New(msg)
+		}
+
+		log.Printf("Migration executed: %s\n", fn)
+	}
+
+	return nil
+}
+
+func (m *Migrator) RollbackAll() error {
+	top := len(m.migs) - 1
+	for i := top; i >= 0; i-- {
+		tx := m.GetTx()
+		mg := m.migs[i]
+		exec := mg.Executor
+		exec.SetTx(tx)
+
+		fn := getFxName(exec.GetDown())
+		//fn := fmt.Sprintf("Down%08d", i+1)
+		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
+
+		// Read error
+		err, ok := values[0].Interface().(error)
+		if !ok && err != nil {
+			log.Printf("Rollback not executed: %s\n", fn)
+			log.Printf("Err '%+v' of type %T", err, err)
+		}
+
+		// Remove  migration record.
+		err = m.delMigration(exec)
+
+		err = tx.Commit()
+		if err != nil {
+			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
+			log.Printf("Commit error: %s", msg)
+			tx.Rollback()
+			return errors.New(msg)
+		}
+
+		log.Printf("Rollback executed: %s\n", fn)
+	}
+
+	return nil
 }
 
 func (m *Migrator) Reset(name string) error {
@@ -250,127 +356,18 @@ func (m *Migrator) Reset(name string) error {
 	return nil
 }
 
-func (m *Migrator) CreateMigrations() bool {
-	return false
-}
-
-// DropMigrations table.
-func (m *Migrator) DropMigrations() bool {
-	return false
-}
-
-func (m *Migrator) AddUp(mg *Migration) {
-	m.up = append(m.up, mg)
-}
-
-func (m *Migrator) AddDown(rb *Migration) {
-	m.down = append(m.down, rb)
-}
-
-func (m *Migrator) MigrateAll() error {
-	m.PreSetup()
-
-	for i, mg := range m.up {
-		exec := mg.Executor
-		tx := m.GetTx()
-		exec.SetTx(tx)
-
-		// Expected function name to execute
-		fn := fmt.Sprintf("Up%08d", i+1)
-		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
-
-		// Type assert result
-		name, ok := values[0].Interface().(string)
-
-		// Read name
-		if !ok {
-			tx.Rollback()
-			return errors.New("Not a valid migration function name")
-		}
-
-		// Read error
-		err, ok := values[1].Interface().(error)
-		if !ok && err != nil {
-			log.Printf("Migration not executed: %s\n", name) // TODO: Remove log
-			log.Printf("Err  %+v' of type %T\n", err, err)   // TODO: Remove log.
-			msg := fmt.Sprintf("cannot run migration '%s': %s", name, err.Error())
-			tx.Rollback()
-			return errors.New(msg)
-		}
-
-		// Register migration
-		err = m.recMigration(tx, name)
-
-		err = tx.Commit()
-		if err != nil {
-			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
-			log.Printf("Commit error: %s", msg)
-			tx.Rollback()
-			return errors.New(msg)
-		}
-
-		log.Printf("Migration executed: %s\n", name)
-	}
-
-	return nil
-}
-
-func (m *Migrator) RollbackAll() error {
-	top := len(m.down) - 1
-	for i := top; i >= 0; i-- {
-		tx := m.GetTx()
-		mg := m.down[i]
-		exec := mg.Executor
-		exec.SetTx(tx)
-
-		fn := fmt.Sprintf("Down%08d", i+1)
-		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
-
-		// Type assert result
-		name, ok := values[0].Interface().(string)
-
-		// Read name
-		if !ok {
-			log.Println("Not a valid rollback function name")
-		}
-
-		// Read error
-		err, ok := values[1].Interface().(error)
-		if !ok && err != nil {
-			log.Printf("Rollback not executed: %s\n", name)
-			log.Printf("Err '%+v' of type %T", err, err)
-		}
-
-		// Register migration
-		err = m.delMigration(tx, name)
-
-		err = tx.Commit()
-		if err != nil {
-			msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
-			log.Printf("Commit error: %s", msg)
-			tx.Rollback()
-			return errors.New(msg)
-		}
-
-		log.Printf("Rollback executed: %s\n", name)
-	}
-
-	return nil
-}
-
-func (m *Migrator) MigrateThis(mg Migration) error {
-	return nil
-}
-
-func (m *Migrator) RollbackThis(r Migration) error {
-	return nil
-}
-
-func (m *Migrator) recMigration(tx *sqlx.Tx, name string) error {
+func (m *Migrator) recMigration(e Exec) error {
 	st := fmt.Sprintf(pgRecMigrationSt, m.schema, pgMigrationsTable)
-	_, err := tx.NamedExec(st, migRecord{
+	upFx := getFxName(e.GetUp())
+	downFx := getFxName(e.GetDown())
+	name := toSnakeCase(upFx)
+	log.Printf("%+s", upFx)
+
+	_, err := e.GetTx().NamedExec(st, migRecord{
 		ID:        uuid.NewV4(),
 		Name:      db.ToNullString(name),
+		UpFx:      db.ToNullString(upFx),
+		DownFx:    db.ToNullString(downFx),
 		IsApplied: db.ToNullBool(true),
 		CreatedAt: postgres.ToNullTime(time.Now()),
 	})
@@ -383,9 +380,10 @@ func (m *Migrator) recMigration(tx *sqlx.Tx, name string) error {
 	return nil
 }
 
-func (m *Migrator) delMigration(tx *sqlx.Tx, name string) error {
+func (m *Migrator) delMigration(e Exec) error {
+	name := toSnakeCase(getFxName(e.GetUp()))
 	st := fmt.Sprintf(pgDelMigrationSt, m.schema, pgMigrationsTable, name)
-	_, err := tx.Exec(st)
+	_, err := e.GetTx().Exec(st)
 
 	if err != nil {
 		msg := fmt.Sprintf("Cannot update migrations table: %s\n", err.Error())
@@ -393,6 +391,18 @@ func (m *Migrator) delMigration(tx *sqlx.Tx, name string) error {
 	}
 
 	return nil
+}
+
+func getFxName(i interface{}) string {
+	n := runtime.FuncForPC(reflect.ValueOf(i).Pointer()).Name()
+	t := strings.FieldsFunc(n, split)
+	return t[len(t)-2]
+}
+
+func toSnakeCase(str string) string {
+	snake := matchFirstCap.ReplaceAllString(str, "${1}_${2}")
+	snake = matchAllCap.ReplaceAllString(snake, "${1}_${2}")
+	return strings.ToLower(snake)
 }
 
 func (m *Migrator) dbURL() string {
