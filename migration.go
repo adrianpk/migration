@@ -80,6 +80,8 @@ const (
 
 	pgDropMigrationsSt = `DROP TABLE %s.%s;`
 
+	pgSelMigrationSt = `SELECT is_applied FROM %s.%s WHERE name = '%s' and is_applied = true`
+
 	pgRecMigrationSt = `INSERT INTO %s.%s (id, name, up_fx, down_fx, is_applied, created_at)
 		VALUES (:id, :name, :up_fx, :down_fx, :is_applied, :created_at);`
 
@@ -260,15 +262,21 @@ func (m *Migrator) MigrateAll() error {
 
 	for _, mg := range m.migs {
 		exec := mg.Executor
+		fn := getFxName(exec.GetUp())
+		name := migName(fn)
+
+		// Continue if already applied
+		if !m.canApplyMigration(name) {
+			log.Printf("Migration '%s' already applied.", name)
+			continue
+		}
 
 		// Get a new Tx from migrator
 		tx := m.GetTx()
-		// Pass it to the executor
+		// Pass Tx to the executor
 		exec.SetTx(tx)
 
 		// Expected function name to execute
-		fn := getFxName(exec.GetUp())
-		//fn := fmt.Sprintf("Up%08d", i+1)
 		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
 
 		// Read error
@@ -307,7 +315,6 @@ func (m *Migrator) RollbackAll() error {
 		exec.SetTx(tx)
 
 		fn := getFxName(exec.GetDown())
-		//fn := fmt.Sprintf("Down%08d", i+1)
 		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
 
 		// Read error
@@ -360,7 +367,7 @@ func (m *Migrator) recMigration(e Exec) error {
 	st := fmt.Sprintf(pgRecMigrationSt, m.schema, pgMigrationsTable)
 	upFx := getFxName(e.GetUp())
 	downFx := getFxName(e.GetDown())
-	name := toSnakeCase(upFx)
+	name := migName(upFx)
 	log.Printf("%+s", upFx)
 
 	_, err := e.GetTx().NamedExec(st, migRecord{
@@ -380,8 +387,31 @@ func (m *Migrator) recMigration(e Exec) error {
 	return nil
 }
 
+func (m *Migrator) canApplyMigration(name string) bool {
+	st := fmt.Sprintf(pgSelMigrationSt, m.schema, pgMigrationsTable, name)
+	r, err := m.conn.Query(st)
+
+	if err != nil {
+		log.Printf("Cannot determine migration status: %s\n", err.Error())
+		return false
+	}
+
+	for r.Next() {
+		var applied sql.NullBool
+		err = r.Scan(&applied)
+		if err != nil {
+			log.Printf("Cannot determine migration status: %s\n", err.Error())
+			return false
+		}
+
+		return !applied.Bool
+	}
+
+	return true
+}
+
 func (m *Migrator) delMigration(e Exec) error {
-	name := toSnakeCase(getFxName(e.GetUp()))
+	name := migName(getFxName(e.GetUp()))
 	st := fmt.Sprintf(pgDelMigrationSt, m.schema, pgMigrationsTable, name)
 	_, err := e.GetTx().Exec(st)
 
@@ -397,6 +427,10 @@ func getFxName(i interface{}) string {
 	n := runtime.FuncForPC(reflect.ValueOf(i).Pointer()).Name()
 	t := strings.FieldsFunc(n, split)
 	return t[len(t)-2]
+}
+
+func migName(upFxName string) string {
+	return toSnakeCase(upFxName)
 }
 
 func toSnakeCase(str string) string {
