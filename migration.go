@@ -241,23 +241,7 @@ func (m *Migrator) AddMigration(e Exec) {
 	m.migs = append(m.migs, &Migration{Executor: e})
 }
 
-func split(r rune) bool {
-	return r == '.' || r == '-'
-}
-
-// Migrate pending migrations.
-func (m *Migrator) Migrate(mg Migration) error {
-	panic("not implemented yet")
-	return nil
-}
-
-// Rollback last migrations.
-func (m *Migrator) Rollback(mg Migration) error {
-	panic("not implemented yet")
-	return nil
-}
-
-func (m *Migrator) MigrateAll() error {
+func (m *Migrator) Migrate() error {
 	m.PreSetup()
 
 	for _, mg := range m.migs {
@@ -276,7 +260,7 @@ func (m *Migrator) MigrateAll() error {
 		// Pass Tx to the executor
 		exec.SetTx(tx)
 
-		// Expected function name to execute
+		// Execute migration
 		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
 
 		// Read error
@@ -306,15 +290,52 @@ func (m *Migrator) MigrateAll() error {
 	return nil
 }
 
+// Rollback migrations.
+func (m *Migrator) Rollback(steps ...int) error {
+	// Default to 1 step if no value is provided
+	s := 1
+	if len(steps) > 0 && steps[0] > 1 {
+		s = steps[0]
+	}
+
+	// Default to max n° migration if steps is higher
+	c := m.count()
+	if s > c {
+		s = c
+	}
+
+	m.rollback(s)
+	return nil
+}
+
+// Rollback all migrations.
 func (m *Migrator) RollbackAll() error {
-	top := len(m.migs) - 1
-	for i := top; i >= 0; i-- {
-		tx := m.GetTx()
+	return m.rollback(m.count())
+}
+
+func (m *Migrator) rollback(steps int) error {
+	count := m.count()
+	stopAt := count - steps
+
+	for i := count - 1; i >= stopAt; i-- {
 		mg := m.migs[i]
 		exec := mg.Executor
+		fn := getFxName(exec.GetDown())
+		// Migration name is associated to up migration
+		name := migName(getFxName(exec.GetUp()))
+
+		// Continue if already not rolledback
+		if m.cancelRollback(name) {
+			log.Printf("Rollback '%s' already executed.", name)
+			continue
+		}
+
+		// Get a new Tx from migrator
+		tx := m.GetTx()
+		// Pass Tx to the executor
 		exec.SetTx(tx)
 
-		fn := getFxName(exec.GetDown())
+		// Execute rollback
 		values := reflect.ValueOf(exec).MethodByName(fn).Call([]reflect.Value{})
 
 		// Read error
@@ -324,7 +345,7 @@ func (m *Migrator) RollbackAll() error {
 			log.Printf("Err '%+v' of type %T", err, err)
 		}
 
-		// Remove  migration record.
+		// Remove migration record.
 		err = m.delMigration(exec)
 
 		err = tx.Commit()
@@ -354,7 +375,7 @@ func (m *Migrator) Reset(name string) error {
 		return err
 	}
 
-	err = m.MigrateAll()
+	err = m.Migrate()
 	if err != nil {
 		log.Printf("Drop database error: %s", err.Error())
 		return err
@@ -385,6 +406,29 @@ func (m *Migrator) recMigration(e Exec) error {
 	}
 
 	return nil
+}
+
+func (m *Migrator) cancelRollback(name string) bool {
+	st := fmt.Sprintf(pgSelMigrationSt, m.schema, pgMigrationsTable, name)
+	r, err := m.conn.Query(st)
+
+	if err != nil {
+		log.Printf("Cannot determine rollback status: %s\n", err.Error())
+		return true
+	}
+
+	for r.Next() {
+		var applied sql.NullBool
+		err = r.Scan(&applied)
+		if err != nil {
+			log.Printf("Cannot determine migration status: %s\n", err.Error())
+			return true
+		}
+
+		return !applied.Bool
+	}
+
+	return true
 }
 
 func (m *Migrator) canApplyMigration(name string) bool {
@@ -423,10 +467,22 @@ func (m *Migrator) delMigration(e Exec) error {
 	return nil
 }
 
+func (m *Migrator) count() (last int) {
+	return len(m.migs)
+}
+
+func (m *Migrator) last() (last int) {
+	return m.count() - 1
+}
+
 func getFxName(i interface{}) string {
 	n := runtime.FuncForPC(reflect.ValueOf(i).Pointer()).Name()
 	t := strings.FieldsFunc(n, split)
 	return t[len(t)-2]
+}
+
+func split(r rune) bool {
+	return r == '.' || r == '-'
 }
 
 func migName(upFxName string) string {
