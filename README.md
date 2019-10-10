@@ -2,12 +2,14 @@
 
 ## Use [draft]
 ### Install
+
 **Download**
 ```shell
 $ go get -u gitlab.com/mikrowezel/backend/migration
 ```
 
 **Implement Exec interface**
+
 Something like this
 ```go
 package yourpkg
@@ -54,6 +56,7 @@ func (m *mig) GetTx() (tx *sqlx.Tx) {
 ```
 
 **Implement migrations**
+
 They look something like this.
 ```go
 package yourpkg
@@ -108,40 +111,7 @@ import(
 	"gitlab.com/mikrowezel/backend/migration"
 )
 
-
-func init(){
-  m := getMigrator()
-
-  // Migrate
-  m.Migrate()
-
-  // Rollback last
-  m.Rollback()
-
-  // Migrate again
-  m.Migrate()
-
-  // Last 5 migrations
-  // Or less if number exceeds currently applied
-  m.Rollback(5) // Default to one in this case
-
-  // Migrate again
-  m.Migrate()
-
-  // Rollback all
-  m.RollbackAll() // All migrations
-
-  // Create database
-  m.CreateDb()
-
-  // Drop database
-  m.DropDb()
-
-  // Reset database
-  // Drop, if exists, create and migrate.
-  m.Reset()
-}
-
+// ...
 func getMigrator() *migration.Migrator {
   cfg := getConfig()
 	m := migration.Init(cfg)
@@ -176,9 +146,48 @@ func getConfig() *config.Config {
 	cfg.SetValues(values)
 	return cfg
 }
+
+// ...
 ```
 
+**Execute them**
+```go
+// ...
 
+func init(){
+  m := getMigrator()
+
+  // Migrate
+  m.Migrate()
+
+  // Rollback last
+  m.Rollback()
+
+  // Migrate again
+  m.Migrate()
+
+  // Last 5 migrations
+  // Or less if number exceeds currently applied
+  m.Rollback(5) // Default to one in this case
+
+  // Migrate again
+  m.Migrate()
+
+  // Rollback all
+  m.RollbackAll() // All migrations
+
+  // Create database
+  m.CreateDb()
+
+  // Drop database
+  m.DropDb()
+
+  // Reset database
+  // Drop, if exists, create and migrate.
+  m.Reset()
+}
+
+```
 
 ## Notes
 * API not full polished/implemeted.
