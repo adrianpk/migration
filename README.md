@@ -5,6 +5,8 @@
 * Some use case:
   * [Code](https://github.com/adrianpk/granica/tree/master/internal/migration)
   * [Tests](https://github.com/adrianpk/granica/blob/4fc686ccdce83aaf32d4d51c9b91b657f0753c56/internal/repo/user_test.go#L70)
+* There is some code duplication related to app database connection and template database connection that need to be removed.
+
 
 ## Use
 ### Install
