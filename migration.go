@@ -56,7 +56,6 @@ type (
 		UpFx      sql.NullString `db:"up_fx" json:"upFx"`
 		DownFx    sql.NullString `db:"down_fx" json:"downFx"`
 		IsApplied sql.NullBool   `db:"is_applied" json:"isApplied"`
-		CreatedAt pq.NullTime    `db:"created_at" json:"createdAt"`
 	}
 )
 
@@ -362,11 +361,11 @@ func (m *Migrator) rollback(steps int) error {
 	return nil
 }
 
-func (m *Migrator) Reset(name string) error {
+func (m *Migrator) Reset() error {
 	_, err := m.DropDb()
 	if err != nil {
 		log.Printf("Drop database error: %s", err.Error())
-		// Do't return maybe it was not created before.
+		// Don't return maybe it was not created before.
 	}
 
 	_, err = m.CreateDb()
