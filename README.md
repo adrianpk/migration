@@ -1,5 +1,185 @@
 # Migration
 
+## Use [draft]
+### Install
+**Download**
+```shell
+$ go get -u gitlab.com/mikrowezel/backend/migration
+```
+
+**Implement Exec interface**
+Something like this
+```go
+package yourpkg
+
+import (
+	"github.com/jmoiron/sqlx"
+
+	"gitlab.com/mikrowezel/backend/migration"
+)
+
+type (
+	mig struct {
+		name string
+		up   migration.Fx
+		down migration.Fx
+		tx   *sqlx.Tx
+	}
+)
+
+func (m *mig) Config(up migration.Fx, down migration.Fx) {
+	m.up = up
+	m.down = down
+}
+
+func (m *mig) GetName() (name string) {
+	return m.name
+}
+
+func (m *mig) GetUp() (up migration.Fx) {
+	return m.up
+}
+
+func (m *mig) GetDown() (down migration.Fx) {
+	return m.down
+}
+
+func (m *mig) SetTx(tx *sqlx.Tx) {
+	m.tx = tx
+}
+
+func (m *mig) GetTx() (tx *sqlx.Tx) {
+	return m.tx
+}
+```
+
+**Implement migrations**
+They look something like this.
+```go
+package yourpkg
+
+import "log"
+
+// CreateUsersTable migration
+func (m *mig) CreateUsersTable() error {
+	tx := m.GetTx()
+
+	st := `CREATE TABLE users
+	(
+		id UUID PRIMARY KEY,
+		slug VARCHAR(36),
+		username VARCHAR(32) UNIQUE,
+		password_digest CHAR(128),
+		email VARCHAR(255) UNIQUE,
+	);`
+
+	_, err := tx.Exec(st)
+	if err != nil {
+		log.Prinf("%s\n", err.Error())
+		return err
+	}
+
+  return nil
+}
+
+// DropUsersTable rollback
+func (m *mig) DropUsersTable() error {
+	tx := m.GetTx()
+
+	st := `DROP TABLE users;`
+
+	_, err := tx.Exec(st)
+	if err != nil {
+		log.Prinf("%s\n", err.Error())
+		return err
+	}
+
+	return nil
+}
+```
+
+**Add them to Migrator**
+
+```go
+package yourpkg
+
+import(
+	"gitlab.com/mikrowezel/backend/config"
+	"gitlab.com/mikrowezel/backend/migration"
+)
+
+
+func init(){
+  m := getMigrator()
+
+  // Migrate
+  m.Migrate()
+
+  // Rollback last
+  m.Rollback()
+
+  // Migrate again
+  m.Migrate()
+
+  // Last 5 migrations
+  // Or less if number exceeds currently applied
+  m.Rollback(5) // Default to one in this case
+
+  // Migrate again
+  m.Migrate()
+
+  // Rollback all
+  m.RollbackAll() // All migrations
+
+  // Create database
+  m.CreateDb()
+
+  // Drop database
+  m.DropDb()
+
+  // Reset database
+  // Drop, if exists, create and migrate.
+  m.Reset()
+}
+
+func getMigrator() *migration.Migrator {
+  cfg := getConfig()
+	m := migration.Init(cfg)
+
+	// Migrations
+	// Enable PoVstgis
+	mg := &mig{}
+	mg.Config(mg.EnablePostgis, mg.DropPostgis)
+	m.AddMigration(mg)
+
+	// CreateUsersTable
+	mg = &mig{}
+	mg.Config(mg.CreateUsersTable, mg.DropUsersTable)
+	m.AddMigration(mg)
+
+	return m
+}
+
+func getConfig() *config.Config {
+	cfg := &config.Config{}
+	values := map[string]string{
+		"pg.host":               "localhost",
+		"pg.port":               "5432",
+		"pg.schema":             "public",
+		"pg.database":           "granica_test",
+		"pg.user":               "granica",
+		"pg.password":           "granica",
+		"pg.backoff.maxentries": "3",
+	}
+
+	cfg.SetNamespace("appnamespace")
+	cfg.SetValues(values)
+	return cfg
+}
+```
+
+
+
 ## Notes
 * API not full polished/implemeted.
 * Only PostgreSQL for now but changes to make it work with other databases should be trivial.
