@@ -56,6 +56,7 @@ type (
 		UpFx      sql.NullString `db:"up_fx" json:"upFx"`
 		DownFx    sql.NullString `db:"down_fx" json:"downFx"`
 		IsApplied sql.NullBool   `db:"is_applied" json:"isApplied"`
+		CreatedAt pq.NullTime    `db:"created_at" json:"createdAt"`
 	}
 )
 
