@@ -117,11 +117,6 @@ func getMigrator() *migration.Migrator {
 	m := migration.Init(cfg)
 
 	// Migrations
-	// Enable PoVstgis
-	mg := &mig{}
-	mg.Config(mg.EnablePostgis, mg.DropPostgis)
-	m.AddMigration(mg)
-
 	// CreateUsersTable
 	mg = &mig{}
 	mg.Config(mg.CreateUsersTable, mg.DropUsersTable)
