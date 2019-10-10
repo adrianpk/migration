@@ -27,11 +27,12 @@ type (
 
 	// Migrator struct.
 	Migrator struct {
-		cfg    *config.Config
-		conn   *sqlx.DB
-		schema string
-		db     string
-		migs   []*Migration
+		cfg      *config.Config
+		conn     *sqlx.DB
+		tmplConn *sqlx.DB
+		schema   string
+		db       string
+		migs     []*Migration
 	}
 
 	// Exec interface.
@@ -64,10 +65,10 @@ const (
 	pgMigrationsTable = "migrations"
 
 	pgCreateDbSt = `
-		CREATE DATABASE %s.%s;`
+		CREATE DATABASE %s;`
 
 	pgDropDbSt = `
-		DROP DATABASE %s.%s;`
+		DROP DATABASE %s;`
 
 	pgCreateMigrationsSt = `CREATE TABLE %s.%s (
 		id UUID PRIMARY KEY,
@@ -96,7 +97,13 @@ var (
 // Init to explicitly start the migrator.
 func Init(cfg *config.Config) *Migrator {
 	mig := &Migrator{cfg: cfg}
+
 	err := mig.Connect()
+	if err != nil {
+		os.Exit(1)
+	}
+
+	err = mig.TmplConnect()
 	if err != nil {
 		os.Exit(1)
 	}
@@ -119,6 +126,24 @@ func (m *Migrator) Connect() error {
 	}
 
 	m.conn = conn
+	return nil
+}
+
+// TmplConnect to template database.
+func (m *Migrator) TmplConnect() error {
+	conn, err := sqlx.Open("postgres", m.templateDbURL())
+	if err != nil {
+		log.Printf("Connection error: %s\n", err.Error())
+		return err
+	}
+
+	err = conn.Ping()
+	if err != nil {
+		log.Printf("Connection error: %s", err.Error())
+		return err
+	}
+
+	m.tmplConn = conn
 	return nil
 }
 
@@ -197,11 +222,10 @@ func (m *Migrator) migTableExists() bool {
 
 // CreateDb migration.
 func (m *Migrator) CreateDb() (string, error) {
-	tx := m.GetTx()
+	m.CloseAppConns()
+	st := fmt.Sprintf(pgCreateDbSt, m.db)
 
-	st := fmt.Sprintf(pgCreateDbSt, m.schema, m.db)
-
-	_, err := tx.Exec(st)
+	_, err := m.tmplConn.Exec(st)
 	if err != nil {
 		return m.db, err
 	}
@@ -211,11 +235,24 @@ func (m *Migrator) CreateDb() (string, error) {
 
 // DropDb migration.
 func (m *Migrator) DropDb() (string, error) {
-	tx := m.GetTx()
+	m.CloseAppConns()
+	st := fmt.Sprintf(pgDropDbSt, m.db)
 
-	st := fmt.Sprintf(pgDropDbSt, m.schema, m.db)
+	_, err := m.tmplConn.Exec(st)
+	if err != nil {
+		return m.db, err
+	}
 
-	_, err := tx.Exec(st)
+	return m.db, nil
+}
+
+// CreateDb migration.
+func (m *Migrator) CloseAppConns() (string, error) {
+	dbName := m.cfg.ValOrDef("pg.database", "")
+	st := `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s';`
+	st = fmt.Sprintf(st, dbName)
+
+	_, err := m.tmplConn.Exec(st)
 	if err != nil {
 		return m.db, err
 	}
@@ -503,4 +540,14 @@ func (m *Migrator) dbURL() string {
 	user := m.cfg.ValOrDef("pg.user", "granica")
 	pass := m.cfg.ValOrDef("pg.password", "granica")
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable search_path=%s", host, port, user, pass, m.db, m.schema)
+}
+
+func (m *Migrator) templateDbURL() string {
+	host := m.cfg.ValOrDef("pg.host", "localhost")
+	port := m.cfg.ValOrDef("pg.port", "5432")
+	schema := "public"
+	db := "postgres"
+	user := m.cfg.ValOrDef("pg.user", "granica")
+	pass := m.cfg.ValOrDef("pg.password", "granica")
+	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable search_path=%s", host, port, user, pass, db, schema)
 }
