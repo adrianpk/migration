@@ -27,12 +27,12 @@ type (
 
 	// Migrator struct.
 	Migrator struct {
-		cfg      *config.Config
-		conn     *sqlx.DB
-		tmplConn *sqlx.DB
-		schema   string
-		db       string
-		migs     []*Migration
+		cfg    *config.Config
+		conn   *sqlx.DB
+		pgConn *sqlx.DB
+		schema string
+		db     string
+		migs   []*Migration
 	}
 
 	// Exec interface.
@@ -103,7 +103,7 @@ func Init(cfg *config.Config) *Migrator {
 		os.Exit(1)
 	}
 
-	err = mig.TmplConnect()
+	err = mig.pgConnect()
 	if err != nil {
 		os.Exit(1)
 	}
@@ -129,9 +129,10 @@ func (m *Migrator) Connect() error {
 	return nil
 }
 
-// TmplConnect to template database.
-func (m *Migrator) TmplConnect() error {
-	conn, err := sqlx.Open("postgres", m.templateDbURL())
+// pgConnect to postgre database
+// mainly user to create and drop app database.
+func (m *Migrator) pgConnect() error {
+	conn, err := sqlx.Open("postgres", m.pgDbURL())
 	if err != nil {
 		log.Printf("Connection error: %s\n", err.Error())
 		return err
@@ -143,7 +144,7 @@ func (m *Migrator) TmplConnect() error {
 		return err
 	}
 
-	m.tmplConn = conn
+	m.pgConn = conn
 	return nil
 }
 
@@ -225,7 +226,7 @@ func (m *Migrator) CreateDb() (string, error) {
 	m.CloseAppConns()
 	st := fmt.Sprintf(pgCreateDbSt, m.db)
 
-	_, err := m.tmplConn.Exec(st)
+	_, err := m.pgConn.Exec(st)
 	if err != nil {
 		return m.db, err
 	}
@@ -238,7 +239,7 @@ func (m *Migrator) DropDb() (string, error) {
 	m.CloseAppConns()
 	st := fmt.Sprintf(pgDropDbSt, m.db)
 
-	_, err := m.tmplConn.Exec(st)
+	_, err := m.pgConn.Exec(st)
 	if err != nil {
 		return m.db, err
 	}
@@ -252,7 +253,7 @@ func (m *Migrator) CloseAppConns() (string, error) {
 	st := `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s';`
 	st = fmt.Sprintf(st, dbName)
 
-	_, err := m.tmplConn.Exec(st)
+	_, err := m.pgConn.Exec(st)
 	if err != nil {
 		return m.db, err
 	}
@@ -394,6 +395,22 @@ func (m *Migrator) rollback(steps int) error {
 		}
 
 		log.Printf("Rollback executed: %s\n", fn)
+	}
+
+	return nil
+}
+
+func (m *Migrator) SoftReset() error {
+	err := m.RollbackAll()
+	if err != nil {
+		log.Printf("Cannot rollback database: %s", err.Error())
+		return err
+	}
+
+	err = m.Migrate()
+	if err != nil {
+		log.Printf("Cannot migrate database: %s", err.Error())
+		return err
 	}
 
 	return nil
@@ -542,7 +559,7 @@ func (m *Migrator) dbURL() string {
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable search_path=%s", host, port, user, pass, m.db, m.schema)
 }
 
-func (m *Migrator) templateDbURL() string {
+func (m *Migrator) pgDbURL() string {
 	host := m.cfg.ValOrDef("pg.host", "localhost")
 	port := m.cfg.ValOrDef("pg.port", "5432")
 	schema := "public"
