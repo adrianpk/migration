@@ -23,43 +23,43 @@ Something like this
 package yourpkg
 
 import (
-	"github.com/jmoiron/sqlx"
+  "github.com/jmoiron/sqlx"
 
-	"gitlab.com/mikrowezel/backend/migration"
+  "gitlab.com/mikrowezel/backend/migration"
 )
 
 type (
-	mig struct {
-		name string
-		up   migration.Fx
-		down migration.Fx
-		tx   *sqlx.Tx
-	}
+  mig struct {
+    name string
+    up   migration.Fx
+    down migration.Fx
+    tx   *sqlx.Tx
+  }
 )
 
 func (m *mig) Config(up migration.Fx, down migration.Fx) {
-	m.up = up
-	m.down = down
+  m.up = up
+  m.down = down
 }
 
 func (m *mig) GetName() (name string) {
-	return m.name
+  return m.name
 }
 
 func (m *mig) GetUp() (up migration.Fx) {
-	return m.up
+  return m.up
 }
 
 func (m *mig) GetDown() (down migration.Fx) {
-	return m.down
+  return m.down
 }
 
 func (m *mig) SetTx(tx *sqlx.Tx) {
-	m.tx = tx
+  m.tx = tx
 }
 
 func (m *mig) GetTx() (tx *sqlx.Tx) {
-	return m.tx
+  return m.tx
 }
 ```
 
@@ -73,39 +73,39 @@ import "log"
 
 // CreateUsersTable migration
 func (m *mig) CreateUsersTable() error {
-	tx := m.GetTx()
+  tx := m.GetTx()
 
-	st := `CREATE TABLE users
-	(
-		id UUID PRIMARY KEY,
-		slug VARCHAR(36),
-		username VARCHAR(32) UNIQUE,
-		password_digest CHAR(128),
-		email VARCHAR(255) UNIQUE,
-	);`
+  st := `CREATE TABLE users
+  (
+    id UUID PRIMARY KEY,
+    slug VARCHAR(36),
+    username VARCHAR(32) UNIQUE,
+    password_digest CHAR(128),
+    email VARCHAR(255) UNIQUE,
+  );`
 
-	_, err := tx.Exec(st)
-	if err != nil {
-		log.Prinf("%s\n", err.Error())
-		return err
-	}
+  _, err := tx.Exec(st)
+  if err != nil {
+    log.Prinf("%s\n", err.Error())
+    return err
+  }
 
   return nil
 }
 
 // DropUsersTable rollback
 func (m *mig) DropUsersTable() error {
-	tx := m.GetTx()
+  tx := m.GetTx()
 
-	st := `DROP TABLE users;`
+  st := `DROP TABLE users;`
 
-	_, err := tx.Exec(st)
-	if err != nil {
-		log.Prinf("%s\n", err.Error())
-		return err
-	}
+  _, err := tx.Exec(st)
+  if err != nil {
+    log.Prinf("%s\n", err.Error())
+    return err
+  }
 
-	return nil
+  return nil
 }
 ```
 
@@ -115,39 +115,42 @@ func (m *mig) DropUsersTable() error {
 package yourpkg
 
 import(
-	"gitlab.com/mikrowezel/backend/config"
-	"gitlab.com/mikrowezel/backend/migration"
+  "gitlab.com/mikrowezel/backend/config"
+  "gitlab.com/mikrowezel/backend/migration"
 )
 
 // ...
 func getMigrator() *migration.Migrator {
   cfg := getConfig()
-	m := migration.Init(cfg)
+  m := migration.Init(cfg)
 
-	// Migrations
-	// CreateUsersTable
-	mg = &mig{}
-	mg.Config(mg.CreateUsersTable, mg.DropUsersTable)
-	m.AddMigration(mg)
+  // Migrations
+  mg := &mig{}
+  mg.Config(mg.CreateUsersTable, mg.DropUsersTable)
+  m.AddMigration(mg)
 
-	return m
+  // mg = &mig{}
+  // mg.Config(mg.CreateAnotherTable, mg.DropAnotherTable)
+  // m.AddMigration(mg)
+
+  return m
 }
 
 func getConfig() *config.Config {
-	cfg := &config.Config{}
-	values := map[string]string{
-		"pg.host":               "localhost",
-		"pg.port":               "5432",
-		"pg.schema":             "public",
-		"pg.database":           "granica_test",
-		"pg.user":               "granica",
-		"pg.password":           "granica",
-		"pg.backoff.maxentries": "3",
-	}
+  cfg := &config.Config{}
+  values := map[string]string{
+    "pg.host":               "localhost",
+    "pg.port":               "5432",
+    "pg.schema":             "public",
+    "pg.database":           "granica_test",
+    "pg.user":               "granica",
+    "pg.password":           "granica",
+    "pg.backoff.maxentries": "3",
+  }
 
-	cfg.SetNamespace("appnamespace")
-	cfg.SetValues(values)
-	return cfg
+  cfg.SetNamespace("appnamespace")
+  cfg.SetValues(values)
+  return cfg
 }
 
 // ...
@@ -185,8 +188,12 @@ func init(){
   // Drop database
   m.DropDb()
 
+  // Sogt reset database
+  // Rollback all and migrate
+  m.SoftReset()
+
   // Reset database
-  // Drop, if exists, create and migrate.
+  // Drop, if exists, create and migrate
   m.Reset()
 }
 
