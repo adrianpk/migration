@@ -142,9 +142,9 @@ func getConfig() *config.Config {
     "pg.host":               "localhost",
     "pg.port":               "5432",
     "pg.schema":             "public",
-    "pg.database":           "granica_test",
-    "pg.user":               "granica",
-    "pg.password":           "granica",
+    "pg.database":           "app_test",
+    "pg.user":               "user",
+    "pg.password":           "password",
     "pg.backoff.maxentries": "3",
   }
 
