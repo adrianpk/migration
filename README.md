@@ -65,7 +65,7 @@ func (m *mig) GetTx() (tx *sqlx.Tx) {
 
 **Implement migrations**
 
-They look something like this.
+Something like this.
 ```go
 package yourpkg
 
