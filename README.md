@@ -86,7 +86,7 @@ func (m *mig) CreateUsersTable() error {
 
   _, err := tx.Exec(st)
   if err != nil {
-    log.Prinf("%s\n", err.Error())
+    log.Printf("%s\n", err.Error())
     return err
   }
 
@@ -101,7 +101,7 @@ func (m *mig) DropUsersTable() error {
 
   _, err := tx.Exec(st)
   if err != nil {
-    log.Prinf("%s\n", err.Error())
+    log.Printf("%s\n", err.Error())
     return err
   }
 
@@ -188,11 +188,11 @@ func init(){
   // Drop database
   m.DropDb()
 
-  // Sogt reset database
+  // Database soft-reset
   // Rollback all and migrate
   m.SoftReset()
 
-  // Reset database
+  // Database reset
   // Drop, if exists, create and migrate
   m.Reset()
 }
