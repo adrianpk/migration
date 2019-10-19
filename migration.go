@@ -425,7 +425,7 @@ func (m *Migrator) Reset() error {
 
 	_, err = m.CreateDb()
 	if err != nil {
-		log.Printf("Drop database error: %s", err.Error())
+		log.Printf("Create database error: %s", err.Error())
 		return err
 	}
 
